@@ -1,7 +1,20 @@
 import time
 import requests
 import gspread
+import threading
+from flask import Flask
 from oauth2client.service_account import ServiceAccountCredentials
+
+# === Tạo một trang web ảo để Render chấp nhận gói FREE ===
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Robot check don dang hoat dong binh thuong!"
+
+def run_web_server():
+    # Chạy trang web ở cổng 10000 (mặc định của Render)
+    app.run(host='0.0.0.0', port=10000)
 
 # === ĐIỀN THÔNG TIN CỦA BẠN VÀO ĐÂY ===
 TELEGRAM_TOKEN = "8652940672:AAGoNUoa2KkBZgwiT1sjbltUNS_fjdDl0JM"
@@ -28,7 +41,7 @@ def check_spx_status_api(tracking_number):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://tramavandon.com/"
         }
-        response = requests.get(url, headers=headers, timeout=5)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             if "logs" in data and len(data["logs"]) > 0:
@@ -47,14 +60,12 @@ def main_process():
         trang_thai_cu = str(row.get('Trạng thái mới nhất', '')).strip()
         robot_note = str(row.get('Ghi chú của Robot', '')).strip()
         
-        # Bỏ qua dòng trống hoặc đơn đã hoàn thành
         if not ma_don or "Đã xong" in robot_note:
             continue
             
         print(f"Đang check: {ten_don} ({ma_don})...")
         trang_thai_moi = check_spx_status_api(ma_don)
         
-        # CHỈ XỬ LÝ KHI TRẠNG THÁI THỰC SỰ THAY ĐỔI
         if trang_thai_moi and trang_thai_moi != trang_thai_cu:
             current_time = time.strftime("%H:%M %d/%m")
             
@@ -63,25 +74,32 @@ def main_process():
             else:
                 new_robot_note = f"Đang check ({current_time})"
                 
-            # Ghi đè trạng thái mới lên Google Sheets
-            sheet.update_cell(index, 3, trang_thai_moi) # Cột C
-            sheet.update_cell(index, 4, new_robot_note)  # Cột D
+            sheet.update_cell(index, 3, trang_thai_moi)
+            sheet.update_cell(index, 4, new_robot_note)
             
-            # Gửi tin nhắn báo về Telegram
             msg = (f"⚡ *CẬP NHẬT ĐƠN HÀNG HỎA TỐC!*\n"
                    f"📦 Đơn hàng: *{ten_don}*\n"
                    f"🆔 Mã: `{ma_don}`\n"
                    f"🚚 Trạng thái: *{trang_thai_moi}*")
             send_telegram(msg)
-            
-            # Nghỉ 1.5 giây giữa các đơn để tránh lỗi hạn mức lệnh của Google Sheets
-            time.sleep(1.5) 
+            time.sleep(2)
 
-while True:
-    try:
-        print("=== BẮT ĐẦU LƯỢT QUẾT 1 PHÚT ===")
-        main_process()
-    except Exception as e:
-        print(f"Lỗi: {e}")
-    print("Xong lượt quét. Đang đợi 60 giây...")
-    time.sleep(60) # Chờ đúng 1 phút để lặp lại
+# Hàm vòng lặp chạy ngầm quét đơn sau mỗi 1 phút
+def bot_loop():
+    while True:
+        try:
+            print("=== BẮT ĐẦU LƯỢT QUẾT 1 PHÚT (WEB) ===")
+            main_process()
+        except Exception as e:
+            print(f"Lỗi hệ thống: {e}")
+        print("Xong lượt quét. Đang đợi đúng 60 giây...")
+        time.sleep(60)
+
+if __name__ == "__main__":
+    # Chạy vòng lặp bot tách biệt ở một luồng ngầm (Thread)
+    t = threading.Thread(target=bot_loop)
+    t.daemon = True
+    t.start()
+    
+    # Chạy server web chính để Render thấy gói Free
+    run_web_server()
